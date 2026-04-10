@@ -1,6 +1,6 @@
 
 build:
-	@go clean && @go build -o build/gunter cmd/main.go
+	@go clean && go build -o build/gunter cmd/main.go
 run:
 	@go run cmd/main.go
 test:
