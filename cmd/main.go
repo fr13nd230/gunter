@@ -5,26 +5,31 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+	// "strings"
 )
 
-// LoadDatabse(root string) ([]string, error)
+// LoadDatabase(root string) ([]string, error)
 // Walks recursively any dir and read all txt files that contains hashes.
 func LoadDatabase(root string) ([]string, error) {
 	var data []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	secRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	err = filepath.WalkDir(secRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		if !d.IsDir() && filepath.Ext(path) == ".txt" {
-			file, err := os.OpenFile(path, os.O_RDONLY, 0755)
+			file, err := os.OpenFile(path, os.O_RDONLY, 0655)
 			if err != nil {
 				return err
 			}
@@ -58,8 +63,17 @@ type FileData struct {
 	sha256Hash string
 }
 
-func getFileHash(path string) (*FileData, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0755)
+// GetFileHash(path string) (*FileData, error)
+// This function will open a file and hash it to three continous hashes.
+func GetFileHash(path string) (*FileData, error) {
+	secPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(secPath, os.O_RDONLY, 0644)
+	if err == fs.ErrNotExist {
+		return nil, errors.New("No such file exists.")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -75,17 +89,15 @@ func getFileHash(path string) (*FileData, error) {
 	}
 
 	return &FileData{
-		md5Hash:    string(hMD5.Sum(nil)),
-		sha1Hash:   string(hSHA1.Sum(nil)),
-		sha256Hash: string(hSHA256.Sum(nil)),
+		md5Hash:    fmt.Sprintf("%x", hMD5.Sum(nil)),
+		sha1Hash:   fmt.Sprintf("%x", hSHA1.Sum(nil)),
+		sha256Hash: fmt.Sprintf("%x", hSHA256.Sum(nil)),
 	}, nil
 }
 
 // Usage: gunter [args]
 // Example: gunter -file path/to/file -database /opt/database
 func main() {
-	code := 1
-
 	args := os.Args[1:]
 	if len(args) == 0 {
 		fmt.Println("Usage: gunter [args]")
@@ -94,10 +106,10 @@ func main() {
 		fmt.Println("\t -database [PATH] provide a path to a directory containing hash signature files.")
 		fmt.Println("\t -file [PATH] provide the path to scan a single file.")
 		fmt.Println("\t -dir [PATH] provide a path to recursively scan a dir.")
-		os.Exit(code)
+		os.Exit(2)
 	}
 
-	database := flag.String("database", "database/", "-database [PATH] provide a path to a directory containing hash singnature files.")
+	database := flag.String("database", "database/", "-database [PATH] provide a path to a directory containing hash signature files.")
 	dir := flag.String("dir", "", "-dir [PATH] provide a path to recursively scan a dir.")
 	file := flag.String("file", "", "-file [PATH] provide a path to scan a single file.")
 
@@ -105,26 +117,62 @@ func main() {
 
 	hashes, err := LoadDatabase(*database)
 	if err != nil {
-		code = -1
 		fmt.Printf("Provided database couldn't be loaded, %v", err)
-		os.Exit(code)
+		os.Exit(1)
 	}
 
-	var fh *FileData
-	if strings.TrimSpace(*file) != " " && dir == nil {
-		fh, err = getFileHash(*file)
+	var affected int
+	// var scanned int
+
+	if (*file != "" && *dir != "") || (*file == "" && *dir == "") {
+		fmt.Println("Exactly one of -file or -dir must be provided, type gunter -h for usage help.")
+		os.Exit(2)
+	}
+
+	if *file != "" {
+		fh, err := GetFileHash(*file)
 		if err != nil {
-			code = -1
-			fmt.Printf("Provided file couldn't be loaded, %v", err)
-			os.Exit(code)
+			fmt.Printf("Provided file couldn't be loaded: %v\n", err)
+			os.Exit(1)
 		}
+		// scanned = 1
+		for _, hash := range hashes {
+			if hash == fh.md5Hash || hash == fh.sha1Hash || hash == fh.sha256Hash {
+				affected++
+			}
+		}
+	} else if *dir != "" {
+		// err := filepath.WalkDir(*dir, func(path string, d fs.DirEntry, err error) error {
+		// 	if err != nil {
+		// 		return err
+		// 	}
+		// 	if !d.IsDir() && !strings.HasPrefix(filepath.Ext(path), ".") {
+		// 		// Process all files (no extension filter for simplicity)
+		// 		fh, err := GetFileHash(path)
+		// 		if err != nil {
+		// 			// Skip files we can't read, but continue scanning
+		// 			return nil
+		// 		}
+		// 		scanned++
+		// 		for _, hash := range hashes {
+		// 			if hash == fh.md5Hash || hash == fh.sha1Hash || hash == fh.sha256Hash {
+		// 				affected++
+		// 			}
+		// 		}
+		// 	}
+		// 	return nil
+		// })
+		// if err != nil {
+		// 	fmt.Printf("Error scanning directory: %v\n", err)
+		// 	os.Exit(1)
+		// }
 	}
 
-	fmt.Println("===== GUNTER =====")
-	fmt.Printf("Program has ran and finished with code %v\n", code)
+	fmt.Println("========== GUNTER ==========")
 	fmt.Printf("-database %v\n", len(hashes))
-	fmt.Printf("-file %v and md5 %v\n", *file, fh.md5Hash)
+	fmt.Printf("-file %v\n", *file)
 	fmt.Printf("-dir %v\n", *dir)
-	fmt.Println("==================")
-	os.Exit(code)
+	fmt.Printf("Scanned files, %v has been affected.\n", affected)
+	fmt.Println("============================")
+	os.Exit(0)
 }
